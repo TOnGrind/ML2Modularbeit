@@ -28,9 +28,14 @@ def get_emnist_test_train():
 
     # Augmentierung (nur affine Transformationen – keine Spiegelung)
     augment = Compose([
-        RandomAffine(degrees=10, translate=(0.1, 0.1), scale=(0.95, 1.05), shear=5),
-        ToTensor()
-    ])
+    RandomAffine(
+        degrees=0,            # Keine Rotation
+        translate=(0.05, 0.05),
+        scale=(0.98, 1.02),
+        shear=0               # Keine Scherung
+    ),
+    ToTensor()
+])
 
     # Zielanzahl pro Klasse
     samples_per_class_train = 5000
