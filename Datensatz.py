@@ -1,10 +1,31 @@
 import torch
 from torchvision import datasets
-from torchvision.transforms import ToTensor, RandomAffine, Compose
+from torchvision.transforms import Compose, RandomResizedCrop, ColorJitter, RandomAffine, ToTensor
 from collections import defaultdict
 import random
 from PIL import Image
 import matplotlib.pyplot as plt
+
+
+
+
+
+def cutout(img, mask_size=8):
+    """Cutout-Augenblick: Zufälliges Rechteck aus dem Bild entfernen."""
+    h, w = img.shape[1], img.shape[2]
+    top = random.randint(0, h - mask_size)
+    left = random.randint(0, w - mask_size)
+
+    img[:, top:top+mask_size, left:left+mask_size] = 0
+    return img
+
+def add_noise(img, noise_factor=0.2):
+    """Fügt zufälliges Rauschen zum Bild hinzu."""
+    img = img + noise_factor * torch.randn_like(img)
+    img = torch.clamp(img, 0., 1.)  # Werte zwischen 0 und 1 begrenzen
+    return img
+
+
 
 def get_emnist_test_train():
     emnist = datasets.EMNIST(root='data', split='byclass', train=True, download=True)
@@ -27,15 +48,20 @@ def get_emnist_test_train():
     target_labels = [label for label, ascii_code in mapping_dict.items() if ascii_code in class_list]
 
     # Augmentierung (nur affine Transformationen – keine Spiegelung)
+    # Augmentierungsstrategie
     augment = Compose([
+    RandomResizedCrop(size=28, scale=(0.8, 1.0)),  # Zufällige Skalierung und Zuschneiden
+    ColorJitter(brightness=0.2, contrast=0.2),      # Helligkeit und Kontrast zufällig ändern
     RandomAffine(
-        degrees=0,            # Keine Rotation
-        translate=(0.05, 0.05),
-        scale=(0.98, 1.02),
-        shear=0               # Keine Scherung
+        degrees=0,                                  # Keine Rotation
+        shear=5,                                    # Kleine Scherung
+        translate=(0.1, 0.1),                       # Kleine Translationen
+        scale=(0.9, 1.1)                            # Kleine Skalierungen
     ),
-    ToTensor()
-])
+    ToTensor(),
+    lambda x: add_noise(x),                          # Zufälliges Rauschen hinzufügen
+    lambda x: cutout(x),                             # Cutout hinzufügen
+    ] )
 
     # Zielanzahl pro Klasse
     samples_per_class_train = 5000

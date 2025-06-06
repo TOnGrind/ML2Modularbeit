@@ -244,12 +244,55 @@ class BasicBlock(nn.Module):
         out += self.shortcut(x)
         return torch.relu(out)
 
+
+class BasicBlock2(nn.Module):
+    expansion = 1
+    
+    def __init__(self, in_planes, planes, stride=1, negative_slope=0.01):
+        super(BasicBlock2, self).__init__()
+        
+        # Erste Convolutional Layer mit BatchNorm und Leaky ReLU
+        self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(planes)
+        
+        # Zweite Convolutional Layer mit BatchNorm und Leaky ReLU
+        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(planes)
+
+        # Shortcut-Block (Falls notwendig)
+        self.shortcut = nn.Identity()  # Verwenden von nn.Identity() für den Fall ohne Transformation
+        if stride != 1 or in_planes != planes:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_planes, planes, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(planes)
+            )
+        
+        # Negative slope für LeakyReLU
+        self.negative_slope = negative_slope
+
+    def forward(self, x):
+        # Erste Convolution und LeakyReLU Aktivierung
+        out = F.leaky_relu(self.bn1(self.conv1(x)), negative_slope=self.negative_slope)
+        
+        # Zweite Convolution und BatchNorm
+        out = self.bn2(self.conv2(out))
+        
+        # Shortcut Verknüpfung hinzufügen
+        out += self.shortcut(x)
+        
+        # Letzte Aktivierung
+        return F.leaky_relu(out, negative_slope=self.negative_slope)
+
+
+
+
 class ResNet(nn.Module):
     def __init__(self, block, num_blocks, num_classes=1000):
         super(ResNet, self).__init__()
         self.in_planes = 64
 
-        self.conv1 = nn.Conv2d(3, 64, 7, 2, 3, bias=False)
+        # Eingabe-Channel von 3 auf 1 ändern
+        self.conv1 = nn.Conv2d(1, 64, 7, 2, 3, bias=False)  # Hier 1 statt 3
         self.bn1 = nn.BatchNorm2d(64)
         self.pool = nn.MaxPool2d(3, 2, 1)
         self.layer1 = self._make_layer(block, 64, num_blocks[0], stride=1)
@@ -277,5 +320,5 @@ class ResNet(nn.Module):
         x = x.view(x.size(0), -1)
         return self.fc(x)
 
-def ResNet18(num_classes=1000):
+def ResNet18(BasicBlock = BasicBlock2,num_classes=1000):
     return ResNet(BasicBlock, [2, 2, 2, 2], num_classes)
