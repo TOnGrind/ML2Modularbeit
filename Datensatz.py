@@ -159,7 +159,7 @@ def show_random_samples(X, y, class_list, n=10):
     for i, idx in enumerate(indices):
         img = X[idx].squeeze().numpy()
         label = y[idx].item()
-        ascii_label = chr(class_list[label])  # Neues Mapping per Liste
+        ascii_label = str(class_list[label])  # Neues Mapping per Liste
 
         plt.subplot(1, n, i + 1)
         plt.imshow(img, cmap='gray')

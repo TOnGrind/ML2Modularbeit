@@ -12,6 +12,9 @@ import matplotlib.pyplot as plt
 from torch.optim.lr_scheduler import StepLR
 import copy
 from Datensatz import get_emnist_test_train
+import optuna
+from Klassifikator import get_objective, ResNet18, EarlyStopping
+
 
 # Device-Konfiguration
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -333,6 +336,8 @@ def main():
     print("Training des modularen Klassifikators")
     print("="*50)
     
+    
+    """
     # Optuna-Studie für modulares System
     study = optuna.create_study(direction="maximize")
     study.optimize(
@@ -345,7 +350,20 @@ def main():
         ), 
         n_trials=5
     )
-    
+    """
+    study = optuna.create_study(direction="maximize")
+    study.optimize(get_objective(
+          train_dataset=train_dataset,
+          test_dataset=test_dataset,
+          device=device,
+          model=ResNet18(num_classes=len(class_list)).to(device),
+          early_stopping=EarlyStopping(patience=4)), n_trials=20)
+
+    # Beste Parameter anzeigen
+    print("🎯 Beste Hyperparameter:")
+    for k, v in study.best_params.items():
+        print(f"{k}: {v}")
+        
     # Beste Hyperparameter ausgeben
     print("\n🎯 Beste Hyperparameter für modulares System:")
     for key, value in study.best_params.items():
