@@ -130,6 +130,7 @@ def get_emnist_test_train():
 
     print("✅ Trainingsdaten:", X_train.shape, y_train.shape)
     print("✅ Testdaten:", X_test.shape, y_test.shape)
+    class_list = list('0123456789ABCDEFGHIJKLMabcdefghijklm')
 
     return X_train, y_train, X_test, y_test, class_list
 
