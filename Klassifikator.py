@@ -10,6 +10,7 @@ from torchvision.transforms import ToTensor, RandomAffine, Compose
 from PIL import Image
 from collections import defaultdict
 from torch.utils.data import DataLoader
+import os
 
 
 def configuartion(device = torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
@@ -65,37 +66,58 @@ def compute_accuracy(model, data_loader, device):
     return correct / total
 
     
-def get_objective(train_dataset, test_dataset, device, model, early_stopping):
+def get_objective(train_dataset, test_dataset, device,model, num_classes, early_stopping):
     def objective(trial):
+        # 1. Modell für jeden Trial neu initialisieren
+        
+        
+        # 2. Hyperparameter vorschlagen
         batch_size = trial.suggest_categorical("batch_size", [64, 128, 144, 256])
         lr = trial.suggest_float("lr", 1e-4, 0.1, log=True)
         momentum = trial.suggest_float("momentum", 0.6, 0.95)
         step_size = trial.suggest_int("step_size", 2, 5)
         gamma = trial.suggest_float("gamma", 0.5, 0.95)
 
+        # 3. DataLoader mit neuen Hyperparametern
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-        
+        # 4. Optimierungs-Komponenten
         criterion = nn.CrossEntropyLoss()
         optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=momentum)
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
-
+        
         
 
+        # 6. Trainingsschleife mit Progress-Reporting
         for epoch in range(20):
             train_one_epoch(model, train_loader, optimizer, criterion, device)
             val_loss = evaluate_model(model, test_loader, criterion, device)
-
-            early_stopping(val_loss)
+            
+            # 7. Scheduler und Early Stopping
+            scheduler.step()
+            early_stopping(val_loss, model)
+            
+            # Berichterstattung für bessere Beobachtung
+            trial.report(val_loss, epoch)
+            
+            # Prüfen ob Trial frühzeitig gestoppt werden sollte
+            if trial.should_prune():
+                raise optuna.exceptions.TrialPruned()
+            
             if early_stopping.early_stop:
                 print(f"⛔ Early Stopping in Epoch {epoch+1}")
                 break
 
-            print(f"📉 Epoch {epoch+1}: Val Loss = {val_loss:.4f}")
-            scheduler.step()
-
+        # 8. Bestes Modell des Trials laden
+        model.load_state_dict(torch.load(early_stopping.path))
+        
+        # 9. Endgültige Accuracy berechnen
         accuracy = compute_accuracy(model, test_loader, device)
+        
+        # 10. Temporäre Datei bereinigen
+        os.remove(early_stopping.path)
+        
         return accuracy
 
     return objective
@@ -106,24 +128,39 @@ def get_objective(train_dataset, test_dataset, device, model, early_stopping):
 # Early Stopping
 # -----------------------------
 class EarlyStopping:
-    def __init__(self, patience=4, min_delta=0.001):
+    def __init__(self, patience=5, delta=0, verbose=False, path='checkpoint.pth'):
         self.patience = patience
-        self.min_delta = min_delta
+        self.delta = delta
+        self.verbose = verbose
         self.counter = 0
-        self.best_loss = None
+        self.best_score = None
         self.early_stop = False
+        self.val_loss_min = float('inf')
+        self.path = path
 
-    def __call__(self, val_loss):
-        if self.best_loss is None or val_loss < self.best_loss - self.min_delta:
-            self.best_loss = val_loss
-            self.counter = 0
-        else:
+    def __call__(self, val_loss, model):
+        score = -val_loss  # Höhere Werte = besser
+        
+        if self.best_score is None:
+            self.best_score = score
+            self.save_checkpoint(val_loss, model)
+        elif score < self.best_score + self.delta:
             self.counter += 1
+            if self.verbose:
+                print(f'EarlyStopping counter: {self.counter}/{self.patience}')
             if self.counter >= self.patience:
                 self.early_stop = True
+        else:
+            self.best_score = score
+            self.save_checkpoint(val_loss, model)
+            self.counter = 0
 
-
-
+    def save_checkpoint(self, val_loss, model):
+        """Speichert Modell wenn Validation Loss sinkt"""
+        if self.verbose:
+            print(f'Validation loss decreased ({self.val_loss_min:.4f} --> {val_loss:.4f}). Saving model...')
+        torch.save(model.state_dict(), self.path)
+        self.val_loss_min = val_loss
 
 
 # -----------------------------
