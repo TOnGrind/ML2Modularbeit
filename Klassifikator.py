@@ -11,6 +11,7 @@ from PIL import Image
 from collections import defaultdict
 from torch.utils.data import DataLoader
 import os
+import optuna
 
 
 def configuartion(device = torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
@@ -66,59 +67,78 @@ def compute_accuracy(model, data_loader, device):
     return correct / total
 
     
-def get_objective(train_dataset, test_dataset, device,model, num_classes, early_stopping):
+def get_objective(train_dataset, test_dataset,  device, model,  early_stopping):
     def objective(trial):
-        # 1. Modell für jeden Trial neu initialisieren
+        # Modell initialisieren
+       
         
-        
-        # 2. Hyperparameter vorschlagen
+        # Hyperparameter vorschlagen
         batch_size = trial.suggest_categorical("batch_size", [64, 128, 144, 256])
         lr = trial.suggest_float("lr", 1e-4, 0.1, log=True)
         momentum = trial.suggest_float("momentum", 0.6, 0.95)
         step_size = trial.suggest_int("step_size", 2, 5)
         gamma = trial.suggest_float("gamma", 0.5, 0.95)
 
-        # 3. DataLoader mit neuen Hyperparametern
+        # DataLoader
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-        # 4. Optimierungs-Komponenten
+        # Optimierungskomponenten
         criterion = nn.CrossEntropyLoss()
         optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=momentum)
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
         
-        
+        # Early Stopping ohne Dateisystem
+       
 
-        # 6. Trainingsschleife mit Progress-Reporting
-        for epoch in range(20):
-            train_one_epoch(model, train_loader, optimizer, criterion, device)
-            val_loss = evaluate_model(model, test_loader, criterion, device)
-            
-            # 7. Scheduler und Early Stopping
-            scheduler.step()
-            early_stopping(val_loss, model)
-            
-            # Berichterstattung für bessere Beobachtung
-            trial.report(val_loss, epoch)
-            
-            # Prüfen ob Trial frühzeitig gestoppt werden sollte
-            if trial.should_prune():
-                raise optuna.exceptions.TrialPruned()
-            
-            if early_stopping.early_stop:
-                print(f"⛔ Early Stopping in Epoch {epoch+1}")
-                break
+        best_accuracy = 0
+        should_prune = False
 
-        # 8. Bestes Modell des Trials laden
-        model.load_state_dict(torch.load(early_stopping.path))
+        try:
+            for epoch in range(20):
+                # Training
+                train_one_epoch(model, train_loader, optimizer, criterion, device)
+                
+                # Evaluation
+                val_loss = evaluate_model(model, test_loader, criterion, device)
+                accuracy = compute_accuracy(model, test_loader, device)
+                
+                # Scheduler und Early Stopping
+                scheduler.step()
+                early_stopping(val_loss, model)
+                
+                # Fortschritt melden
+                trial.report(accuracy, epoch)
+                
+                # Prüfen auf Pruning
+                if trial.should_prune():
+                    should_prune = True
+                    break
+                
+                if early_stopping.early_stop:
+                    print(f"⛔ Early Stopping in Epoch {epoch+1}")
+                    break
+                
+                # Beste Accuracy aktualisieren
+                if accuracy > best_accuracy:
+                    best_accuracy = accuracy
+
+        except Exception as e:
+            print(f"❌ Trial {trial.number} failed: {str(e)}")
+            raise optuna.exceptions.TrialPruned()
         
-        # 9. Endgültige Accuracy berechnen
-        accuracy = compute_accuracy(model, test_loader, device)
+        # Besten Modellzustand wiederherstellen (falls vorhanden)
+        if early_stopping.best_model_state is not None:
+            model.load_state_dict(early_stopping.best_model_state)
+            final_accuracy = compute_accuracy(model, test_loader, device)
+        else:
+            final_accuracy = best_accuracy
         
-        # 10. Temporäre Datei bereinigen
-        os.remove(early_stopping.path)
+        # Bei Pruning die beste bisherige Accuracy zurückgeben
+        if should_prune:
+            raise optuna.exceptions.TrialPruned()
         
-        return accuracy
+        return final_accuracy
 
     return objective
 
@@ -128,7 +148,7 @@ def get_objective(train_dataset, test_dataset, device,model, num_classes, early_
 # Early Stopping
 # -----------------------------
 class EarlyStopping:
-    def __init__(self, patience=5, delta=0, verbose=False, path='checkpoint.pth'):
+    def __init__(self, patience=5, delta=0, verbose=False):
         self.patience = patience
         self.delta = delta
         self.verbose = verbose
@@ -136,7 +156,7 @@ class EarlyStopping:
         self.best_score = None
         self.early_stop = False
         self.val_loss_min = float('inf')
-        self.path = path
+        self.best_model_state = None  # Speichert den Modellzustand im RAM
 
     def __call__(self, val_loss, model):
         score = -val_loss  # Höhere Werte = besser
@@ -156,10 +176,12 @@ class EarlyStopping:
             self.counter = 0
 
     def save_checkpoint(self, val_loss, model):
-        """Speichert Modell wenn Validation Loss sinkt"""
+        """Speichert Modellzustand im RAM"""
         if self.verbose:
-            print(f'Validation loss decreased ({self.val_loss_min:.4f} --> {val_loss:.4f}). Saving model...')
-        torch.save(model.state_dict(), self.path)
+            print(f'Validation loss decreased ({self.val_loss_min:.4f} --> {val_loss:.4f}). Saving model state.')
+        
+        # Modellzustand im RAM speichern (keine Dateioperation)
+        self.best_model_state = model.state_dict().copy()
         self.val_loss_min = val_loss
 
 
@@ -268,6 +290,58 @@ class ResNet(nn.Module):
 
 def ResNet18(BasicBlock = BasicBlock2,num_classes=1000):
     return ResNet(BasicBlock, [2, 2, 2, 2], num_classes)
+
+
+class TypeClassifier(nn.Module):
+    def __init__(self, dropout_rate=0.3):
+        super().__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(1, 32, 3, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            
+            nn.Conv2d(32, 64, 3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.MaxPool2d(2)
+        )
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(64 * 7 * 7, 128),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate),
+            nn.Linear(128, 3)  # 3 Typen
+        )
+    
+    def forward(self, x):
+        x = self.features(x)
+        return self.classifier(x)
+
+class ModularClassifier(nn.Module):
+    def __init__(self, tm1, tm2, class_type_map):
+        super().__init__()
+        self.tm1 = tm1
+        self.tm2 = tm2
+        self.register_buffer('class_type_map', torch.tensor(class_type_map, dtype=torch.long))
+    
+    def forward(self, x):
+        # Logits zu Wahrscheinlichkeiten konvertieren
+        out_cls = F.softmax(self.tm1(x), dim=1)  # (B, 36)
+        out_type = F.softmax(self.tm2(x), dim=1)  # (B, 3)
+        
+        # Typ-Werte für jede Klasse zuordnen
+        class_type_weights = out_type[:, self.class_type_map]  # (B, 36)
+        s
+        # Kombinierte Vorhersage (mit epsilon zur Vermeidung von Null)
+        final_out = out_cls * (class_type_weights + 1e-8)
+        return final_out, out_cls, out_type
+
+
+
+
+
+
 
 # Hilfsfunktion zur Berechnung der ROC-AUC für das Multiklassenproblem
 def model_output_to_probs(model, test_loader, device):
