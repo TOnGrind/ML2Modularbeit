@@ -167,3 +167,30 @@ def show_random_samples(X, y, class_list, n=10):
         plt.axis('off')
     plt.tight_layout()
     plt.show()
+
+
+
+
+
+def create_class_type_map(class_list):
+    class_type_map = []
+    for c in class_list:
+        if c.isdigit():
+            class_type_map.append(0)
+        elif c.isupper():
+            class_type_map.append(1)
+        else:
+            class_type_map.append(2)
+    return class_type_map
+
+def create_type_labels(labels, class_list):
+    type_labels = []
+    for label in labels:
+        char = class_list[int(label)]
+        if char.isdigit():
+            type_labels.append(0)
+        elif char.isupper():
+            type_labels.append(1)
+        else:
+            type_labels.append(2)
+    return torch.tensor(type_labels, dtype=torch.long)

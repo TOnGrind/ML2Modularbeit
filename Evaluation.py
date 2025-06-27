@@ -15,7 +15,7 @@ def evaluate_model(model, test_loader, device, class_list):
         n_class_samples = defaultdict(int)
 
         # Iteriere über den Testdatensatz
-        for images, labels in test_loader:
+        for images, labels, _ in test_loader:
             images = images.to(device)  # Bilder auf das gleiche Gerät verschieben (GPU oder CPU)
             labels = labels.to(device)  # Labels auf das gleiche Gerät verschieben (GPU oder CPU)
             

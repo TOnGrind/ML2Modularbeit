@@ -66,8 +66,80 @@ def compute_accuracy(model, data_loader, device):
             correct += (predicted == labels).sum().item()
     return correct / total
 
+
+
+def train_one_epoch_type(model, train_loader, optimizer, criterion, device):
+    model.train()
+    for images, _, y_type in train_loader:
+        images, y_type = images.to(device), y_type.to(device)
+        outputs = model(images)
+        loss = criterion(outputs, y_type)
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+
+def evaluate_model_type(model, data_loader, criterion, device):
+    model.eval()
+    total_loss = 0.0
+    with torch.no_grad():
+        for images, _, y_type in data_loader:
+            images, y_type = images.to(device), y_type.to(device)
+            outputs = model(images)
+            total_loss += criterion(outputs, y_type).item()
+    return total_loss / len(data_loader)
+
+
+def compute_accuracy_type(model, data_loader, device):
+    model.eval()
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for images, _, y_type in data_loader:
+            images, y_type = images.to(device), y_type.to(device)
+            outputs = model(images)
+            _, predicted = torch.max(outputs.data, 1)
+            total += y_type.size(0)
+            correct += (predicted == y_type).sum().item()
+    return correct / total
+
+def train_one_epoch_modular(model, train_loader, optimizer, criterion, device):
+    model.train()
+    for images, labels, _ in train_loader:  # y_train_type wird ignoriert (_)
+        images, labels = images.to(device), labels.to(device)
+        final_out = model(images)  # Modell gibt nur final_out zurück
+        loss = criterion(final_out, labels)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+def evaluate_model_modular(model, data_loader, criterion, device):
+    model.eval()
+    total_loss = 0.0
+    with torch.no_grad():
+        for images, labels, _ in data_loader:
+            images, labels = images.to(device), labels.to(device)
+            final_out = model(images)
+            total_loss += criterion(final_out, labels).item()
+    return total_loss / len(data_loader)
+
+def compute_accuracy_modular(model, data_loader, device):
+    model.eval()
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for images, labels, _ in data_loader:
+            images, labels = images.to(device), labels.to(device)
+            final_out = model(images)
+            _, predicted = torch.max(final_out.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+    return correct / total
+
+
     
-def get_objective(train_dataset, test_dataset,  device, model,  early_stopping):
+def get_objective(train_dataset, test_dataset,  device, model, early_stopping,train_fn,eval_fn,compute_accuracy_fn):
     def objective(trial):
         # Modell initialisieren
        
@@ -97,11 +169,11 @@ def get_objective(train_dataset, test_dataset,  device, model,  early_stopping):
         try:
             for epoch in range(20):
                 # Training
-                train_one_epoch(model, train_loader, optimizer, criterion, device)
+                train_fn(model, train_loader, optimizer, criterion, device)
                 
                 # Evaluation
-                val_loss = evaluate_model(model, test_loader, criterion, device)
-                accuracy = compute_accuracy(model, test_loader, device)
+                val_loss = eval_fn(model, test_loader, criterion, device)
+                accuracy = compute_accuracy_fn(model, test_loader, device)
                 
                 # Scheduler und Early Stopping
                 scheduler.step()
@@ -130,7 +202,7 @@ def get_objective(train_dataset, test_dataset,  device, model,  early_stopping):
         # Besten Modellzustand wiederherstellen (falls vorhanden)
         if early_stopping.best_model_state is not None:
             model.load_state_dict(early_stopping.best_model_state)
-            final_accuracy = compute_accuracy(model, test_loader, device)
+            final_accuracy = compute_accuracy_fn(model, test_loader, device)
         else:
             final_accuracy = best_accuracy
         
@@ -144,11 +216,12 @@ def get_objective(train_dataset, test_dataset,  device, model,  early_stopping):
 
 
 
+
 # -----------------------------
 # Early Stopping
 # -----------------------------
 class EarlyStopping:
-    def __init__(self, patience=5, delta=0, verbose=False):
+    def __init__(self, patience=5, delta=0.001, verbose=False):
         self.patience = patience
         self.delta = delta
         self.verbose = verbose
@@ -190,106 +263,61 @@ class EarlyStopping:
 # -----------------------------
 
 
-class BasicBlock(nn.Module):
-    expansion = 1
-    def __init__(self, in_planes, planes, stride=1):
-        super(BasicBlock, self).__init__()
-        self.conv1 = nn.Conv2d(in_planes, planes, 3, stride, 1, bias=False)
-        self.bn1 = nn.BatchNorm2d(planes)
-        self.conv2 = nn.Conv2d(planes, planes, 3, 1, 1, bias=False)
-        self.bn2 = nn.BatchNorm2d(planes)
-
+class ResNetBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, stride=1):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+        
         self.shortcut = nn.Sequential()
-        if stride != 1 or in_planes != planes:
+        if stride != 1 or in_channels != out_channels:
             self.shortcut = nn.Sequential(
-                nn.Conv2d(in_planes, planes, 1, stride, bias=False),
-                nn.BatchNorm2d(planes)
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(out_channels)
             )
-
-    def forward(self, x):
-        out = torch.relu(self.bn1(self.conv1(x)))
-        out = self.bn2(self.conv2(out))
-        out += self.shortcut(x)
-        return torch.relu(out)
-
-
-class BasicBlock2(nn.Module):
-    expansion = 1
     
-    def __init__(self, in_planes, planes, stride=1, negative_slope=0.01):
-        super(BasicBlock2, self).__init__()
-        
-        # Erste Convolutional Layer mit BatchNorm und Leaky ReLU
-        self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(planes)
-        
-        # Zweite Convolutional Layer mit BatchNorm und Leaky ReLU
-        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(planes)
-
-        # Shortcut-Block (Falls notwendig)
-        self.shortcut = nn.Identity()  # Verwenden von nn.Identity() für den Fall ohne Transformation
-        if stride != 1 or in_planes != planes:
-            self.shortcut = nn.Sequential(
-                nn.Conv2d(in_planes, planes, kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(planes)
-            )
-        
-        # Negative slope für LeakyReLU
-        self.negative_slope = negative_slope
-
     def forward(self, x):
-        # Erste Convolution und LeakyReLU Aktivierung
-        out = F.leaky_relu(self.bn1(self.conv1(x)), negative_slope=self.negative_slope)
-        
-        # Zweite Convolution und BatchNorm
+        out = F.relu(self.bn1(self.conv1(x)))
         out = self.bn2(self.conv2(out))
-        
-        # Shortcut Verknüpfung hinzufügen
         out += self.shortcut(x)
+        out = F.relu(out)
+        return out
+    
+class ResNet18(nn.Module):
+    def __init__(self, num_classes=36):
+        super().__init__()
+        self.in_channels = 64
         
-        # Letzte Aktivierung
-        return F.leaky_relu(out, negative_slope=self.negative_slope)
-
-
-
-
-class ResNet(nn.Module):
-    def __init__(self, block, num_blocks, num_classes=1000):
-        super(ResNet, self).__init__()
-        self.in_planes = 64
-
-        # Eingabe-Channel von 3 auf 1 ändern
-        self.conv1 = nn.Conv2d(1, 64, 7, 2, 3, bias=False)  # Hier 1 statt 3
+        self.conv1 = nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
-        self.pool = nn.MaxPool2d(3, 2, 1)
-        self.layer1 = self._make_layer(block, 64, num_blocks[0], stride=1)
-        self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2)
-        self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
-        self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.Linear(512 * block.expansion, num_classes)
-
-    def _make_layer(self, block, planes, num_blocks, stride):
-        strides = [stride] + [1] * (num_blocks - 1)
+        self.layer1 = self._make_layer(64, 2, stride=1)
+        self.layer2 = self._make_layer(128, 2, stride=2)
+        self.layer3 = self._make_layer(256, 2, stride=2)
+        self.layer4 = self._make_layer(512, 2, stride=2)
+        self.linear = nn.Linear(512, num_classes)
+    
+    def _make_layer(self, out_channels, num_blocks, stride):
+        strides = [stride] + [1] * (num_blocks-1)
         layers = []
-        for s in strides:
-            layers.append(block(self.in_planes, planes, s))
-            self.in_planes = planes * block.expansion
+        for stride in strides:
+            layers.append(ResNetBlock(self.in_channels, out_channels, stride))
+            self.in_channels = out_channels
         return nn.Sequential(*layers)
-
+    
     def forward(self, x):
-        x = self.pool(torch.relu(self.bn1(self.conv1(x))))
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
-        x = self.avgpool(x)
-        x = x.view(x.size(0), -1)
-        return self.fc(x)
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.layer1(out)
+        out = self.layer2(out)
+        out = self.layer3(out)
+        out = self.layer4(out)
+        out = F.avg_pool2d(out, 4)
+        out = out.view(out.size(0), -1)
+        out = self.linear(out)
+        return out
 
-def ResNet18(BasicBlock = BasicBlock2,num_classes=1000):
-    return ResNet(BasicBlock, [2, 2, 2, 2], num_classes)
+
 
 
 class TypeClassifier(nn.Module):
@@ -317,6 +345,9 @@ class TypeClassifier(nn.Module):
     def forward(self, x):
         x = self.features(x)
         return self.classifier(x)
+    
+
+
 
 class ModularClassifier(nn.Module):
     def __init__(self, tm1, tm2, class_type_map):
@@ -324,19 +355,27 @@ class ModularClassifier(nn.Module):
         self.tm1 = tm1
         self.tm2 = tm2
         self.register_buffer('class_type_map', torch.tensor(class_type_map, dtype=torch.long))
-    
-    def forward(self, x):
-        # Logits zu Wahrscheinlichkeiten konvertieren
-        out_cls = F.softmax(self.tm1(x), dim=1)  # (B, 36)
-        out_type = F.softmax(self.tm2(x), dim=1)  # (B, 3)
-        
-        # Typ-Werte für jede Klasse zuordnen
-        class_type_weights = out_type[:, self.class_type_map]  # (B, 36)
-        s
-        # Kombinierte Vorhersage (mit epsilon zur Vermeidung von Null)
-        final_out = out_cls * (class_type_weights + 1e-8)
-        return final_out, out_cls, out_type
 
+        # Trainierbarer "Kombinationskopf"
+        self.combination_head = nn.Sequential(
+            nn.Linear(36, 64),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(64, 36)  # zurück auf die Klassenzahl
+        )
+
+    def forward(self, x):
+        out_cls = self.tm1(x)
+        out_type = self.tm2(x)
+
+        probs_cls = F.softmax(out_cls, dim=1)
+        probs_type = F.softmax(out_type, dim=1)
+
+        class_type_weights = probs_type[:, self.class_type_map]
+        combined = probs_cls * class_type_weights
+
+        out = self.combination_head(combined)
+        return out
 
 
 
