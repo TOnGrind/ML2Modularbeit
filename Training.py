@@ -229,3 +229,82 @@ def train_type_classifier(train_loader, test_loader, model, device, criterion, o
         print("✅ Bestes Modell wurde wiederhergestellt")
     else:
         print("⚠️ Kein besseres Modell gefunden als Initialisierung")
+
+
+
+def train_modular_classifier(model, train_loader, test_loader, device, optimizer, scheduler=None, epochs=50):
+    early_stopping = EarlyStopping(patience=5, delta=0.001, verbose=True)
+    best_accuracy = 0.0
+
+    def evaluate(model, loader):
+        model.eval()
+        total_loss = 0.0
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for batch in loader:
+                images = batch[0].to(device)
+                labels_cls = batch[1].to(device)  # immer y_train, nie y_type
+
+                final_out = model(images)
+                loss = F.cross_entropy(final_out, labels_cls)
+
+                total_loss += loss.item() * images.size(0)
+                _, predicted = torch.max(final_out, 1)
+                correct += (predicted == labels_cls).sum().item()
+                total += labels_cls.size(0)
+
+        avg_loss = total_loss / total
+        accuracy = 100.0 * correct / total
+        return avg_loss, accuracy
+
+    for epoch in range(epochs):
+        model.train()
+        running_loss = 0.0
+        correct_train = 0
+        total_train = 0
+
+        for batch in train_loader:
+            images = batch[0].to(device)
+            labels_cls = batch[1].to(device)  # immer y_train, nie y_type
+
+            optimizer.zero_grad()
+            final_out = model(images)
+
+            loss = F.cross_entropy(final_out, labels_cls)
+            loss.backward()
+            optimizer.step()
+
+            running_loss += loss.item() * images.size(0)
+            _, predicted = torch.max(final_out, 1)
+            correct_train += (predicted == labels_cls).sum().item()
+            total_train += labels_cls.size(0)
+
+        if scheduler:
+            scheduler.step()
+
+        avg_train_loss = running_loss / total_train
+        train_acc = 100.0 * correct_train / total_train
+        val_loss, val_acc = evaluate(model, test_loader)
+
+        lr = scheduler.get_last_lr()[0] if scheduler else 'N/A'
+
+        print(f"📊 Epoche {epoch+1}/{epochs}: "
+              f"Train Loss = {avg_train_loss:.4f}, Train Acc = {train_acc:.2f}%, "
+              f"Val Loss = {val_loss:.4f}, Val Acc = {val_acc:.2f}%, LR = {lr}")
+
+        if val_acc > best_accuracy:
+            best_accuracy = val_acc
+
+        early_stopping(val_loss, model)
+        if early_stopping.early_stop:
+            print(f"🛑 Early Stopping bei Epoche {epoch+1} (Beste Val Acc: {best_accuracy:.2f}%)")
+            break
+
+    if early_stopping.best_model_state is not None:
+        model.load_state_dict(early_stopping.best_model_state)
+        print("✅ Bestes Modell wurde wiederhergestellt")
+    else:
+        print("⚠️ Kein besseres Modell gefunden als Initialisierung")
+
+    return model
